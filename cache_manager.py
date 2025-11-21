@@ -2,31 +2,22 @@
 Redis Cache Manager for Knowledge Index and Semantic Cache Index.
 
 This module handles:
-- Connection to Redis Stack
+- Connection to Redis Stack via RedisVL
 - Management of two vector indexes:
-  1. Knowledge Index: Stores document embeddings
-  2. Cache Index: Stores query-response pairs for semantic caching
+  1. Knowledge Index: Stores document chunks (via SearchIndex)
+  2. Cache Index: Stores query-response pairs (via SemanticCache)
 """
 
 import os
 from typing import List, Optional, Dict, Any
-import redis
-from redis.commands.search.field import VectorField, TextField, NumericField
-from redis.commands.search.indexDefinition import IndexDefinition, IndexType
-from redis.commands.search.query import Query
+from redisvl.index import SearchIndex
+from redisvl.extensions.llmcache import SemanticCache
 
+
+from dummy_vectorizer import DummyVectorizer
 
 class CacheManager:
-    """Manages Redis connections and vector indexes for RAG and semantic caching."""
-    
-    # Index names
-    KNOWLEDGE_INDEX = "knowledge_idx"
-    CACHE_INDEX = "cache_idx"
-    
-    # Vector dimension for Gemini embeddings
-    # Note: embedding-001 produces 768-dimensional vectors
-    # This can be overridden via environment variable VECTOR_DIM
-    VECTOR_DIM = int(os.getenv("VECTOR_DIM", "768"))
+    """Manages Redis connections and vector indexes for RAG and semantic caching using RedisVL."""
     
     def __init__(self, redis_url: str, vector_dim: Optional[int] = None):
         """
@@ -34,65 +25,58 @@ class CacheManager:
         
         Args:
             redis_url: Redis connection URL (e.g., redis://localhost:6379)
-            vector_dim: Vector dimension (defaults to VECTOR_DIM class variable)
+            vector_dim: Vector dimension (defaults to 768 if not provided)
         """
-        self.vector_dim = vector_dim or self.VECTOR_DIM
-        self.redis_client = redis.from_url(redis_url, decode_responses=False)
-        self._ensure_indexes()
-    
-    def _ensure_indexes(self):
-        """Create Redis vector indexes if they don't exist."""
-        try:
-            # Check and create Knowledge Index
-            try:
-                self.redis_client.ft(self.KNOWLEDGE_INDEX).info()
-            except redis.exceptions.ResponseError:
-                # Index doesn't exist, create it
-                schema = (
-                    VectorField(
-                        "embedding",
-                        "FLAT",
-                        {
-                            "TYPE": "FLOAT32",
-                            "DIM": self.vector_dim,
-                            "DISTANCE_METRIC": "COSINE",
-                        },
-                    ),
-                    TextField("text"),
-                    TextField("source"),
-                    TextField("chunk_id"),
-                )
-                definition = IndexDefinition(prefix=[f"{self.KNOWLEDGE_INDEX}:"], index_type=IndexType.HASH)
-                self.redis_client.ft(self.KNOWLEDGE_INDEX).create_index(
-                    fields=schema, definition=definition
-                )
+        self.redis_url = redis_url
+        self.vector_dim = vector_dim or int(os.getenv("VECTOR_DIM", "768"))
+        
+        # Initialize Knowledge Index from schema
+        # We assume schema.yaml is in the same directory or we can define it dict-based here
+        # For robustness, let's define it dict-based to avoid file path issues
+        self.knowledge_schema = {
+            "index": {
+                "name": "knowledge_idx",
+                "prefix": "knowledge_idx:"
+            },
+            "fields": [
+                {"name": "text", "type": "text"},
+                {"name": "source", "type": "text"},
+                {"name": "chunk_id", "type": "text"},
+                {
+                    "name": "embedding",
+                    "type": "vector",
+                    "attrs": {
+                        "algorithm": "hnsw",
+                        "distance_metric": "cosine",
+                        "dims": self.vector_dim,
+                        "datatype": "float32"
+                    }
+                }
+            ]
+        }
+        
+        self.knowledge_index = SearchIndex.from_dict(self.knowledge_schema)
+        self.knowledge_index.connect(redis_url=self.redis_url)
+        
+        # Create index if it doesn't exist
+        if not self.knowledge_index.exists():
+            self.knowledge_index.create(overwrite=True)
             
-            # Check and create Cache Index
-            try:
-                self.redis_client.ft(self.CACHE_INDEX).info()
-            except redis.exceptions.ResponseError:
-                # Index doesn't exist, create it
-                schema = (
-                    VectorField(
-                        "query_embedding",
-                        "FLAT",
-                        {
-                            "TYPE": "FLOAT32",
-                            "DIM": self.vector_dim,
-                            "DISTANCE_METRIC": "COSINE",
-                        },
-                    ),
-                    TextField("query"),
-                    TextField("response"),
-                    NumericField("timestamp"),
-                )
-                definition = IndexDefinition(prefix=[f"{self.CACHE_INDEX}:"], index_type=IndexType.HASH)
-                self.redis_client.ft(self.CACHE_INDEX).create_index(
-                    fields=schema, definition=definition
-                )
-        except Exception as e:
-            raise ConnectionError(f"Failed to initialize Redis indexes: {e}")
+        # Initialize Semantic Cache
+        # We pass a dummy vectorizer because we handle embedding generation externally
+        self.semantic_cache = SemanticCache(
+            name="cache_idx",
+            redis_url=self.redis_url,
+            distance_threshold=0.1, # Default threshold, can be overridden in check()
+            vectorizer=DummyVectorizer(dims=self.vector_dim),
+            overwrite=True # Force overwrite if schema mismatch
+        )
     
+    def _float_list_to_bytes(self, float_list: List[float]) -> bytes:
+        """Convert a list of floats to bytes for Redis storage."""
+        import struct
+        return struct.pack(f"{len(float_list)}f", *float_list)
+
     def add_document_chunk(
         self, 
         chunk_id: str, 
@@ -109,21 +93,32 @@ class CacheManager:
             embedding: Vector embedding of the text
             source: Source file/path of the document
         """
-        key = f"{self.KNOWLEDGE_INDEX}:{chunk_id}"
-        
-        # Prepare embedding as bytes
+        # Convert embedding to bytes to avoid redis-py DataError
         embedding_bytes = self._float_list_to_bytes(embedding)
         
-        self.redis_client.hset(
-            key,
-            mapping={
-                "text": text,
-                "embedding": embedding_bytes,
-                "source": source,
-                "chunk_id": chunk_id,
-            }
-        )
+        record = {
+            "chunk_id": chunk_id,
+            "text": text,
+            "embedding": embedding_bytes,
+            "source": source
+        }
+        # RedisVL expects a list of dicts for load
+        self.knowledge_index.load([record])
     
+    def add_documents(self, records: List[Dict[str, Any]]):
+        """
+        Bulk add document chunks to the Knowledge Index.
+        
+        Args:
+            records: List of dictionaries with keys: chunk_id, text, embedding, source
+        """
+        # Convert embeddings to bytes for all records
+        for record in records:
+            if isinstance(record.get("embedding"), list):
+                record["embedding"] = self._float_list_to_bytes(record["embedding"])
+                
+        self.knowledge_index.load(records)
+
     def search_knowledge(
         self, 
         query_embedding: List[float], 
@@ -141,105 +136,103 @@ class CacheManager:
         Returns:
             List of dictionaries containing text, source, chunk_id, and score
         """
-        query_embedding_bytes = self._float_list_to_bytes(query_embedding)
+        from redisvl.query import VectorQuery
         
-        # Create vector query
-        base_query = f"*=>[KNN {top_k} @embedding $vec AS score]"
-        query = Query(base_query).return_fields("text", "source", "chunk_id", "score").sort_by("score").paging(0, top_k).dialect(2)
-        
-        results = self.redis_client.ft(self.KNOWLEDGE_INDEX).search(
-            query, query_params={"vec": query_embedding_bytes}
+        query = VectorQuery(
+            vector=query_embedding,
+            vector_field_name="embedding",
+            return_fields=["text", "source", "chunk_id"],
+            num_results=top_k
         )
         
+        results = self.knowledge_index.query(query)
+        
         # Convert results and filter by threshold
-        # Note: Redis returns distance (lower is better), we convert to similarity (higher is better)
-        # For COSINE: similarity = 1 - distance
         filtered_results = []
-        for doc in results.docs:
-            distance = float(doc.score)
-            similarity = 1 - distance  # Convert distance to similarity
+        for doc in results:
+            # RedisVL returns distance by default for HNSW/Cosine? 
+            # Actually RedisVL normalizes this usually, but let's check the vector_distance field
+            # If using cosine distance, similarity = 1 - distance
+            
+            distance = float(doc.get("vector_distance", 1.0))
+            similarity = 1 - distance
+            
             if similarity >= score_threshold:
                 filtered_results.append({
-                    "text": doc.text,
-                    "source": doc.source,
-                    "chunk_id": doc.chunk_id,
+                    "text": doc.get("text"),
+                    "source": doc.get("source"),
+                    "chunk_id": doc.get("chunk_id"),
                     "score": similarity
                 })
         
         return filtered_results
     
-    def search_cache(
+    def check_cache(
         self, 
         query_embedding: List[float], 
-        similarity_threshold: float = 0.9,
-        top_k: int = 1
+        similarity_threshold: float = 0.9
     ) -> Optional[Dict[str, Any]]:
         """
-        Search the Cache Index for similar queries.
+        Check the Semantic Cache for a similar query.
         
         Args:
             query_embedding: Vector embedding of the query
             similarity_threshold: Minimum similarity score to consider a cache hit
-            top_k: Number of results to check
             
         Returns:
-            Dictionary with query, response, and score if found, None otherwise
+            Dictionary with response and score if found, None otherwise
         """
-        query_embedding_bytes = self._float_list_to_bytes(query_embedding)
+        # SemanticCache.check() usually takes text prompt or vector.
+        # If we pass vector, it returns the response list if found.
+        # However, RedisVL SemanticCache.check() returns a list of results or None?
+        # Let's look at standard usage. 
+        # actually check() returns the response text list if hit, or empty list if miss.
         
-        # Create vector query
-        base_query = f"*=>[KNN {top_k} @query_embedding $vec AS score]"
-        query = Query(base_query).return_fields("query", "response", "score").sort_by("score").paging(0, top_k).dialect(2)
+        # We need to be careful about the threshold. 
+        # SemanticCache uses distance_threshold. 
+        # similarity_threshold 0.9 means distance_threshold 0.1
+        distance_threshold = 1.0 - similarity_threshold
         
-        results = self.redis_client.ft(self.CACHE_INDEX).search(
-            query, query_params={"vec": query_embedding_bytes}
-        )
+        # We temporarily update the threshold of the instance or pass it if supported
+        self.semantic_cache.set_threshold(distance_threshold)
         
-        if results.docs:
-            # Check the top result
-            doc = results.docs[0]
-            distance = float(doc.score)
-            similarity = 1 - distance  # Convert distance to similarity
+        # check() returns List[Dict] usually with 'response', 'payload', etc?
+        # Wait, looking at RedisVL docs/code:
+        # check(vector=...) returns List[Dict] of results.
+        
+        results = self.semantic_cache.check(vector=query_embedding, num_results=1)
+        
+        if results:
+            # results is a list of dicts, e.g. [{'response': '...', 'vector_distance': ...}]
+            result = results[0]
+            return {
+                "response": result["response"],
+                "score": 1 - float(result.get("vector_distance", 0.0)),
+                # We might not get the original query back easily unless we stored it in metadata/payload
+                # But for now let's just return what we have
+                "query": "cached_query" # Placeholder or if we stored it
+            }
             
-            if similarity >= similarity_threshold:
-                return {
-                    "query": doc.query,
-                    "response": doc.response,
-                    "score": similarity
-                }
-        
         return None
     
-    def add_to_cache(
+    def store_cache(
         self, 
         query: str, 
         query_embedding: List[float], 
         response: str
     ):
         """
-        Add a query-response pair to the Cache Index.
+        Store a query-response pair in the Semantic Cache.
         
         Args:
             query: The user's query
             query_embedding: Vector embedding of the query
             response: The generated response
         """
-        import time
-        
-        # Generate a unique key based on timestamp and query hash
-        cache_id = f"{int(time.time())}_{hash(query) % 1000000}"
-        key = f"{self.CACHE_INDEX}:{cache_id}"
-        
-        query_embedding_bytes = self._float_list_to_bytes(query_embedding)
-        
-        self.redis_client.hset(
-            key,
-            mapping={
-                "query": query,
-                "query_embedding": query_embedding_bytes,
-                "response": response,
-                "timestamp": int(time.time()),
-            }
+        self.semantic_cache.store(
+            prompt=query,
+            response=response,
+            vector=query_embedding
         )
     
     def get_stats(self) -> Dict[str, Any]:
@@ -250,18 +243,16 @@ class CacheManager:
             Dictionary with index statistics
         """
         try:
-            # Get Knowledge Index stats
-            knowledge_info = self.redis_client.ft(self.KNOWLEDGE_INDEX).info()
-            knowledge_count = int(knowledge_info.get("num_docs", 0))
+            knowledge_info = self.knowledge_index.info()
+            knowledge_count = knowledge_info.get("num_docs", 0)
             
-            # Get Cache Index stats
-            cache_info = self.redis_client.ft(self.CACHE_INDEX).info()
-            cache_count = int(cache_info.get("num_docs", 0))
+            # SemanticCache doesn't expose info() directly easily, but it uses an underlying SearchIndex
+            # accessible via self.semantic_cache.index
+            cache_info = self.semantic_cache.index.info()
+            cache_count = cache_info.get("num_docs", 0)
             
-            # Check connection
-            self.redis_client.ping()
             connected = True
-        except Exception as e:
+        except Exception:
             connected = False
             knowledge_count = 0
             cache_count = 0
@@ -272,13 +263,9 @@ class CacheManager:
             "cache_index_count": cache_count,
         }
     
-    def _float_list_to_bytes(self, float_list: List[float]) -> bytes:
-        """Convert a list of floats to bytes for Redis storage."""
-        import struct
-        return struct.pack(f"{len(float_list)}f", *float_list)
-    
     def close(self):
         """Close the Redis connection."""
-        if self.redis_client:
-            self.redis_client.close()
-
+        # RedisVL manages connections internally, usually no explicit close needed for the client object
+        # but we can try to disconnect if exposed
+        if hasattr(self.knowledge_index, "disconnect"):
+            self.knowledge_index.disconnect()

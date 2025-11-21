@@ -155,6 +155,7 @@ class RAGEngine:
         
         # Embed and store chunks
         total_chunks = len(all_chunks)
+        records_to_load = []
         
         with Progress(
             SpinnerColumn(),
@@ -174,15 +175,19 @@ class RAGEngine:
                 # Generate unique chunk ID
                 chunk_id = f"{hash(chunk.metadata.get('source', 'unknown'))}_{i}"
                 
-                # Store in Redis
-                self.cache_manager.add_document_chunk(
-                    chunk_id=chunk_id,
-                    text=chunk.page_content,
-                    embedding=embedding,
-                    source=str(chunk.metadata.get("source", "unknown"))
-                )
+                # Prepare record for bulk load
+                records_to_load.append({
+                    "chunk_id": chunk_id,
+                    "text": chunk.page_content,
+                    "embedding": embedding,
+                    "source": str(chunk.metadata.get("source", "unknown"))
+                })
                 
                 progress.update(task, advance=1)
+        
+        # Bulk load into Redis
+        if records_to_load:
+            self.cache_manager.add_documents(records_to_load)
         
         return total_chunks
     
@@ -230,7 +235,7 @@ class RAGEngine:
         query_embedding = self.embeddings.embed_query(user_query)
         
         # Step 2: Check semantic cache first
-        cache_result = self.cache_manager.search_cache(
+        cache_result = self.cache_manager.check_cache(
             query_embedding=query_embedding,
             similarity_threshold=self.cache_threshold
         )
@@ -268,7 +273,7 @@ class RAGEngine:
                 "response": cache_result["response"],
                 "source": "cache",
                 "similarity": cache_result["score"],
-                "cached_query": cache_result["query"],
+                "cached_query": cache_result.get("query", "unknown"),
                 "cost": cost_info,
                 "all_costs": all_costs
             }
@@ -339,7 +344,7 @@ Please provide a comprehensive answer based on the context above. If the context
         )
         
         # Step 4: Cache the query-response pair
-        self.cache_manager.add_to_cache(
+        self.cache_manager.store_cache(
             query=user_query,
             query_embedding=query_embedding,
             response=response

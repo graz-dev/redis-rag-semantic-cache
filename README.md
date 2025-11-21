@@ -1,6 +1,6 @@
 # RAG CLI Application with Semantic Caching
 
-A simple Retrieval-Augmented Generation (RAG) CLI application with semantic caching capabilities, supporting both **Google Gemini** (cloud) and **Ollama** (local) models, built with Redis Stack and LangChain.
+A simple Retrieval-Augmented Generation (RAG) CLI application with semantic caching capabilities, supporting both **Google Gemini** (cloud) and **Ollama** (local) models, built with **RedisVL**, Redis Stack, and LangChain.
 
 ## Quick Start
 
@@ -42,11 +42,11 @@ A simple Retrieval-Augmented Generation (RAG) CLI application with semantic cach
 
 ## Architecture
 
-### Knowledge Index
-Stores embeddings of uploaded documents, enabling semantic search over your knowledge base.
+### Knowledge Index (RedisVL)
+Stores embeddings of uploaded documents using `redisvl.index.SearchIndex`, enabling semantic search over your knowledge base.
 
-### Cache Index (Semantic Cache)
-Stores query-response pairs. When a similar query is detected (above similarity threshold), the cached response is returned immediately, skipping LLM generation.
+### Semantic Cache (RedisVL)
+Uses `redisvl.extensions.llmcache.SemanticCache` to store query-response pairs. When a similar query is detected (above similarity threshold), the cached response is returned immediately, skipping LLM generation.
 
 ### Semantic Caching Flow
 

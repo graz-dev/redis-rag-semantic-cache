@@ -1,0 +1,18 @@
+index:
+  name: knowledge_idx
+  prefix: "knowledge_idx:"
+
+fields:
+  text:
+    type: text
+  source:
+    type: text
+  chunk_id:
+    type: text
+  embedding:
+    type: vector
+    attrs:
+      algorithm: hnsw
+      distance_metric: cosine
+      dims: 768
+      datatype: float32
