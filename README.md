@@ -1,6 +1,6 @@
 # RAG CLI Application with Semantic Caching
 
-A powerful Retrieval-Augmented Generation (RAG) CLI application with semantic caching capabilities, built with Google Gemini, Redis Stack, and LangChain.
+A simple Retrieval-Augmented Generation (RAG) CLI application with semantic caching capabilities, supporting both **Google Gemini** (cloud) and **Ollama** (local) models, built with Redis Stack and LangChain.
 
 ## Quick Start
 
@@ -19,7 +19,9 @@ A powerful Retrieval-Augmented Generation (RAG) CLI application with semantic ca
    ```
 
 3. **Configure environment**:
-   Create a `.env` file with your `GOOGLE_API_KEY` and `REDIS_URL`
+   Create a `.env` file (see Configuration section)
+   - For Gemini: Set `LLM_PROVIDER=gemini` and `GOOGLE_API_KEY`
+   - For Ollama: Set `LLM_PROVIDER=ollama` (requires Ollama installed)
 
 4. **Load documents and chat**:
    ```bash
@@ -31,9 +33,12 @@ A powerful Retrieval-Augmented Generation (RAG) CLI application with semantic ca
 
 - **Dual Redis Indexes**: Separate indexes for knowledge base and semantic cache
 - **Semantic Caching**: Automatically cache and retrieve similar queries to reduce LLM calls
+- **Cost Tracking**: Real-time cost calculation and display for each query-answer pair
+- **Cache Savings**: Visual display of cost savings when cache hits occur
 - **Document Loading**: Support for PDF, TXT, and Markdown files
 - **Interactive Chat**: Beautiful CLI interface with Rich formatting
 - **Progress Tracking**: Visual progress bars during document processing
+- **Multi-Provider Support**: Works with Google Gemini (cloud) and Ollama (local)
 
 ## Architecture
 
@@ -46,19 +51,84 @@ Stores query-response pairs. When a similar query is detected (above similarity 
 ### Semantic Caching Flow
 
 1. User asks a question
-2. Query is embedded using Gemini
+2. Query is embedded using the configured embedding model (Gemini or Ollama)
 3. **Cache Check**: Search Cache Index for similar queries
 4. **Cache Hit**: If similarity ≥ threshold (default 0.9), return cached response
 5. **Cache Miss**: 
    - Search Knowledge Index for relevant context
-   - Generate answer using Gemini LLM
+   - Generate answer using the configured LLM (Gemini or Ollama)
    - Cache the query-response pair for future use
 
 ## Prerequisites
 
 - Python 3.8+
 - Redis Stack (with vector search capabilities)
-- Google Gemini API Key
+- **Either:**
+  - Google Gemini API Key (for cloud-based LLM)
+  - **OR** Ollama installed locally (for local LLM)
+
+### Setting up Ollama (Optional - for Local Models)
+
+If you want to use local models instead of Google Gemini, install and set up Ollama:
+
+**Install Ollama:**
+
+Visit [ollama.ai](https://ollama.ai) and download Ollama for your operating system, or use:
+
+```bash
+# macOS/Linux
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Or download from https://ollama.ai/download
+```
+
+**Install Ollama Python Package:**
+
+```bash
+# Install langchain-ollama (may require resolving version conflicts)
+pip install langchain-ollama
+
+# If you encounter dependency conflicts with langchain 0.3.0, try:
+pip install langchain-ollama --no-deps
+pip install langchain-core>=0.2.20,<0.3.0  # Install compatible version
+```
+
+**Pull Recommended Models:**
+
+For the best RAG experience, we recommend:
+
+```bash
+# Pull the embedding model (required for semantic search)
+ollama pull nomic-embed-text
+
+# Pull a language model (choose one based on your hardware)
+ollama pull llama3.1:8b      # Recommended: Good balance (8GB RAM)
+ollama pull mistral          # Excellent quality (16GB+ RAM)
+ollama pull llama3:8b        # Fast and efficient (8GB RAM)
+ollama pull gemma2:9b        # Google's open model (9GB RAM)
+```
+
+**Verify Ollama is Running:**
+
+```bash
+# Check if Ollama is running
+ollama list
+
+# Test the API
+curl http://localhost:11434/api/tags
+```
+
+**Model Recommendations for RAG:**
+
+| Model | Size | RAM Required | Best For |
+|-------|------|--------------|----------|
+| `llama3.1:8b` | 8B | 8GB+ | **Recommended**: Best balance of quality and speed |
+| `mistral` | 7B | 16GB+ | High quality responses, slightly slower |
+| `llama3:8b` | 8B | 8GB+ | Fast responses, good quality |
+| `gemma2:9b` | 9B | 9GB+ | Google's open model, good quality |
+
+**Embedding Model:**
+- `nomic-embed-text` (768 dimensions) - **Recommended**: Optimized for semantic search, same dimension as Gemini embeddings
 
 ### Setting up Redis Stack
 
@@ -68,7 +138,6 @@ Stores query-response pairs. When a similar query is detected (above similarity 
 
 #### Running Redis Stack with Docker
 
-**Option 1: Using Docker Compose (Recommended)**
 
 A `docker-compose.yml` file is provided for easier management:
 
@@ -87,18 +156,6 @@ This method includes:
 - Persistent data storage (volume)
 - Health checks
 - Automatic restart on failure
-
-**Option 2: Using Docker directly**
-
-```bash
-docker run -d --name redis-stack -p 6379:6379 -p 8001:8001 redis/redis-stack:latest
-```
-
-This command will:
-- Download the `redis/redis-stack:latest` image (if not already present)
-- Start a container named `redis-stack` in detached mode (`-d`)
-- Expose Redis on port `6379` (default Redis port)
-- Expose RedisInsight (web UI) on port `8001`
 
 **Verify Redis is running:**
 
@@ -124,56 +181,6 @@ RedisInsight provides a graphical interface to:
 - Execute Redis commands
 - Inspect vector indexes
 
-**Useful Docker Commands:**
-
-```bash
-# Stop Redis Stack
-docker stop redis-stack
-
-# Start Redis Stack (if stopped)
-docker start redis-stack
-
-# Restart Redis Stack
-docker restart redis-stack
-
-# View Redis logs
-docker logs redis-stack
-
-# Remove Redis Stack container (⚠️ This will delete all data)
-docker rm -f redis-stack
-
-# Run Redis Stack with persistent data (recommended for production)
-docker run -d \
-  --name redis-stack \
-  -p 6379:6379 \
-  -p 8001:8001 \
-  -v redis-data:/data \
-  redis/redis-stack:latest
-
-# Or simply use docker-compose (includes persistent storage)
-docker-compose up -d
-```
-
-**Troubleshooting:**
-
-- **Port already in use**: If port 6379 or 8001 is already in use, you can change the ports:
-  ```bash
-  docker run -d --name redis-stack -p 6380:6379 -p 8002:8001 redis/redis-stack:latest
-  ```
-  Then update your `.env` file: `REDIS_URL=redis://localhost:6380`
-
-- **Container name exists**: If you get an error about the container name existing:
-  ```bash
-  docker rm -f redis-stack  # Remove existing container
-  # Then run the docker run command again
-  ```
-
-- **Check if Redis is accessible**:
-  ```bash
-  redis-cli -h localhost -p 6379 ping
-  # Or using Docker:
-  docker exec -it redis-stack redis-cli ping
-  ```
 
 ## Installation
 
@@ -194,32 +201,37 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Create a `.env` file in the project root:
+
+1. Create a `.env` file in the project root:
 ```bash
 # Copy the example file
 cp env.example .env
 
-# Then edit .env and add your GOOGLE_API_KEY
+# Then edit .env and configure your provider
 ```
 
-Or create it manually with the following content:
+**Configuration Options:**
+
+**Option A: Using Google Gemini (Cloud)**
 ```env
-# Google Gemini API Key (required)
+LLM_PROVIDER=gemini
 GOOGLE_API_KEY=your_google_api_key_here
-
-# Redis Connection URL
-# When using docker-compose: redis://localhost:6379
 REDIS_URL=redis://localhost:6379
-
-# Gemini Model Configuration (optional)
-GEMINI_MODEL=gemini-pro
-GEMINI_EMBEDDING_MODEL=models/embedding-001
-
-# Semantic Cache Similarity Threshold (optional, 0.0 to 1.0)
-CACHE_SIMILARITY_THRESHOLD=0.9
 ```
 
-**Note:** See `env.example` for detailed explanations of each configuration option, including Redis URL formats for different setups (docker-compose, Docker, Redis Cloud, etc.).
+**Option B: Using Ollama (Local)**
+```env
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=llama3.1:8b
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+REDIS_URL=redis://localhost:6379
+```
+
+**Note:** See `env.example` for detailed explanations of all configuration options, including:
+- Provider selection (Gemini vs Ollama)
+- Model recommendations
+- Redis URL formats for different setups
+- Advanced configuration options
 
 ## Usage
 
@@ -242,7 +254,8 @@ python main.py info
 
 Displays:
 - Redis connection status
-- Active Gemini models
+- Active LLM provider (Gemini or Ollama)
+- Active models (LLM and embedding)
 - Number of documents in Knowledge Index
 - Number of cached entries in Cache Index
 
@@ -259,123 +272,48 @@ Features:
 - **Fresh Generation**: Displays in blue, indicating RAG-based generation
 - Type `exit`, `quit`, or `q` to end the session
 
-### Example Session
-
-```
-$ python main.py chat
-
-┌─────────────────────────────────────┐
-│ Welcome                             │
-├─────────────────────────────────────┤
-│ RAG Chat Session                    │
-│ Type your questions. Type 'exit' or │
-│ 'quit' to end.                      │
-└─────────────────────────────────────┘
-
-You: What is machine learning?
-
-┌─────────────────────────────────────┐
-│ Fresh Generation                    │
-├─────────────────────────────────────┤
-│ ✓ Generated via RAG                 │
-└─────────────────────────────────────┘
-
-Machine learning is a subset of artificial intelligence...
-
-You: Can you explain machine learning?
-
-┌─────────────────────────────────────┐
-│ Semantic Cache                      │
-├─────────────────────────────────────┤
-│ ✓ Cache Hit (Similarity: 95.23%)   │
-│ Original query: What is machine     │
-│ learning?                           │
-└─────────────────────────────────────┘
-
-Machine learning is a subset of artificial intelligence...
-```
-
-## Project Structure
-
-```
-redis-rag-semantic-cache/
-├── main.py              # Entry point
-├── cli.py               # CLI commands (Typer)
-├── rag_engine.py        # RAG logic and document processing
-├── cache_manager.py     # Redis connection and index management
-├── requirements.txt     # Python dependencies
-├── docker-compose.yml   # Docker Compose configuration for Redis
-├── env.example          # Example environment variables file
-├── .env                 # Environment variables (create from env.example)
-└── README.md           # This file
-```
 
 ## Configuration
 
 ### Environment Variables
 
+**Provider Selection:**
+- `LLM_PROVIDER` (optional): Choose `"gemini"` or `"ollama"` (default: `"gemini"`)
+
+**Gemini Configuration (if LLM_PROVIDER=gemini):**
 - `GOOGLE_API_KEY` (required): Your Google Gemini API key
-- `REDIS_URL` (optional): Redis connection URL (default: `redis://localhost:6379`)
 - `GEMINI_MODEL` (optional): Gemini model for generation (default: `gemini-pro`)
 - `GEMINI_EMBEDDING_MODEL` (optional): Embedding model (default: `models/embedding-001`)
+
+**Ollama Configuration (if LLM_PROVIDER=ollama):**
+- `OLLAMA_BASE_URL` (optional): Ollama API URL (default: `http://localhost:11434`)
+- `OLLAMA_MODEL` (optional): Ollama model for generation (default: `llama3.1:8b`)
+- `OLLAMA_EMBEDDING_MODEL` (optional): Embedding model (default: `nomic-embed-text`)
+
+**Common Configuration:**
+- `REDIS_URL` (optional): Redis connection URL (default: `redis://localhost:6379`)
 - `CACHE_SIMILARITY_THRESHOLD` (optional): Cache hit threshold 0.0-1.0 (default: `0.9`)
+- `VECTOR_DIM` (optional): Vector dimension (default: `768` for both Gemini and nomic-embed-text)
 
 ### Adjusting Cache Sensitivity
 
 Lower the `CACHE_SIMILARITY_THRESHOLD` (e.g., 0.8) to cache more aggressively, or raise it (e.g., 0.95) for stricter matching.
 
-## How It Works
+### Cost Tracking
 
-1. **Document Indexing**:
-   - Documents are loaded and split into chunks (1000 chars, 200 overlap)
-   - Each chunk is embedded using Gemini Embeddings
-   - Embeddings are stored in Redis Knowledge Index
+The application tracks LLM API costs for each query-answer pair during chat sessions:
 
-2. **Query Processing**:
-   - User query is embedded
-   - Cache Index is searched first (semantic similarity)
-   - If cache miss, Knowledge Index is searched for context
-   - LLM generates answer from context
-   - Query-response pair is cached
+- **Cost Configuration**: Edit `costs-config.json` to configure pricing for different models
+- **Real-time Display**: Costs are displayed after each query showing:
+  - LLM cost projection for ALL configured models (what it would cost if using each model)
+  - Token usage
+  - Savings when cache hits occur (shows savings for each model)
+- **Cache Savings**: When a cache hit occurs, the system shows savings for each model (the LLM cost that was avoided)
+- **Cost Display**: Only LLM costs are shown (embedding costs are excluded)
+- **Comparison Table**: Shows costs and savings for all models configured in `costs-config.json`
 
-3. **Semantic Caching**:
-   - Uses cosine similarity to find similar queries
-   - Threshold-based matching prevents false positives
-   - Significantly reduces API calls and latency
-
-## Troubleshooting
-
-### Redis Connection Issues
-
-Ensure Redis Stack is running:
-```bash
-docker ps | grep redis-stack
-```
-
-Test connection:
-```bash
-redis-cli ping
-```
-
-### API Key Issues
-
-Verify your `.env` file contains a valid `GOOGLE_API_KEY`:
-```bash
-python -c "from dotenv import load_dotenv; import os; load_dotenv(); print('Key found' if os.getenv('GOOGLE_API_KEY') else 'Key missing')"
-```
-
-### Empty Knowledge Base
-
-If `info` shows 0 documents, load some documents first:
-```bash
-python main.py load-documents /path/to/your/documents
-```
-
-## License
-
-MIT License
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
+**Note**: 
+- Cost calculations use token estimation (~4 characters per token)
+- The table shows what the cost would be if you were using each model
+- When cache hits, savings are calculated as the LLM cost that was avoided for each model
+- Costs are only displayed during chat sessions, not during document loading

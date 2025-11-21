@@ -1,0 +1,80 @@
+{
+  "providers": {
+    "gemini": {
+      "models": {
+        "gemini-pro": {
+          "input_cost_per_1k_tokens": 0.0005,
+          "output_cost_per_1k_tokens": 0.0015,
+          "currency": "USD"
+        },
+        "gemini-1.5-pro": {
+          "input_cost_per_1k_tokens": 0.00125,
+          "output_cost_per_1k_tokens": 0.005,
+          "currency": "USD"
+        },
+        "gemini-1.5-flash": {
+          "input_cost_per_1k_tokens": 0.000075,
+          "output_cost_per_1k_tokens": 0.0003,
+          "currency": "USD"
+        },
+        "gemini-1.5-flash-8b": {
+          "input_cost_per_1k_tokens": 0.0000375,
+          "output_cost_per_1k_tokens": 0.00015,
+          "currency": "USD"
+        }
+      },
+      "embedding_models": {
+        "models/embedding-001": {
+          "cost_per_1k_tokens": 0.0001,
+          "currency": "USD"
+        }
+      }
+    },
+    "openai": {
+      "models": {
+        "gpt-4": {
+          "input_cost_per_1k_tokens": 0.03,
+          "output_cost_per_1k_tokens": 0.06,
+          "currency": "USD"
+        },
+        "gpt-4-turbo": {
+          "input_cost_per_1k_tokens": 0.01,
+          "output_cost_per_1k_tokens": 0.03,
+          "currency": "USD"
+        },
+        "gpt-4o": {
+          "input_cost_per_1k_tokens": 0.005,
+          "output_cost_per_1k_tokens": 0.015,
+          "currency": "USD"
+        },
+        "gpt-4o-mini": {
+          "input_cost_per_1k_tokens": 0.00015,
+          "output_cost_per_1k_tokens": 0.0006,
+          "currency": "USD"
+        },
+        "gpt-3.5-turbo": {
+          "input_cost_per_1k_tokens": 0.0005,
+          "output_cost_per_1k_tokens": 0.0015,
+          "currency": "USD"
+        }
+      },
+      "embedding_models": {
+        "text-embedding-3-small": {
+          "cost_per_1k_tokens": 0.00002,
+          "currency": "USD"
+        },
+        "text-embedding-3-large": {
+          "cost_per_1k_tokens": 0.00013,
+          "currency": "USD"
+        },
+        "text-embedding-ada-002": {
+          "cost_per_1k_tokens": 0.0001,
+          "currency": "USD"
+        }
+      }
+    }
+  },
+  "last_updated": "2024-12-01",
+  "note": "Prices are approximate and may vary. Check official provider documentation for current pricing."
+}
+
